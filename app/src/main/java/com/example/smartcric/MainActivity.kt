@@ -308,12 +308,7 @@ fun ReadyScreen(
                         .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
                     onClick = { onPlay(stream.url) }
                 )
-                TvButton(
-                    label = "TV",
-                    modifier = Modifier.width(64.dp).height(56.dp),
-                    isSecondary = true,
-                    onClick = { onSendToTv(stream.url) }
-                )
+                SmallTvButton(onClick = { onSendToTv(stream.url) })
             }
             Spacer(modifier = Modifier.height(12.dp))
         }
@@ -383,6 +378,32 @@ fun TvButton(
             .focusable()
     ) {
         Text(label, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+    }
+}
+
+@Composable
+fun SmallTvButton(onClick: () -> Unit) {
+    var isFocused by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(if (isFocused) 1.12f else 1.0f, label = "tvBtnScale")
+
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(40.dp)
+            .scale(scale)
+            .onFocusChanged { isFocused = it.isFocused }
+            .focusable()
+            .background(
+                color = if (isFocused) Color(0xFF4CAF50) else Color.White.copy(alpha = 0.1f),
+                shape = MaterialTheme.shapes.small
+            )
+    ) {
+        Text(
+            "TV",
+            color = if (isFocused) Color.White else Color.White.copy(alpha = 0.6f),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
 
@@ -555,73 +576,31 @@ fun PlayerScreen(streamUrl: String) {
 
                         val autoPlayScript = """
                             (function() {
-                                var videos = document.querySelectorAll('video');
-                                for (var i = 0; i < videos.length; i++) {
-                                    videos[i].muted = true;
-                                    videos[i].play().then(function() {
-                                        setTimeout(function() {
-                                            var vids = document.querySelectorAll('video');
-                                            for (var j = 0; j < vids.length; j++) { vids[j].muted = false; }
-                                        }, 1000);
-                                    }).catch(function(){});
-                                }
-
-                                var selectors = [
-                                    '.plyr__control--overlaid', '.plyr__play-large',
-                                    'button.plyr__control', '.fp-play', '.fp-play-rounded-fill',
-                                    '#play-pause-button', '[data-plyr="play"]',
-                                    '.vjs-big-play-button', '.play-button',
-                                    'button[aria-label="Play"]', '.ytp-large-play-button'
-                                ];
-                                for (var s = 0; s < selectors.length; s++) {
-                                    var btn = document.querySelector(selectors[s]);
-                                    if (btn) btn.click();
-                                }
-                                if (typeof player !== 'undefined' && player.play) player.play();
-
-                                var userClicked = false;
-                                document.addEventListener('click', () => {
-                                    userClicked = true;
-                                    setTimeout(() => { userClicked = false; }, 3000);
-                                });
-
-                                var loadCounter = 0;
-                                var itv = setInterval(() => {
-                                    loadCounter++;
+                                var tried = false;
+                                function tryPlay() {
+                                    if (tried) return;
                                     var v = document.querySelector('video');
-                                    if (v && v.paused && !userClicked && loadCounter < 15) {
+                                    if (v && !v.paused && v.readyState >= 2) return;
+                                    tried = true;
+                                    if (v) {
                                         v.muted = false;
-                                        v.play().catch(()=>{});
+                                        v.play().catch(function(){});
                                     }
-                                    if (loadCounter < 8) {
-                                        for (var s = 0; s < selectors.length; s++) {
-                                            var btn = document.querySelector(selectors[s]);
-                                            if (btn) btn.click();
-                                        }
+                                    var selectors = [
+                                        '.plyr__control--overlaid', '.fp-play',
+                                        '.vjs-big-play-button', '[data-plyr="play"]',
+                                        'button[aria-label="Play"]'
+                                    ];
+                                    for (var s = 0; s < selectors.length; s++) {
+                                        var btn = document.querySelector(selectors[s]);
+                                        if (btn) { btn.click(); break; }
                                     }
-                                }, 1500);
-                                setTimeout(() => clearInterval(itv), 25000);
+                                }
+                                setTimeout(tryPlay, 2000);
                             })();
                         """.trimIndent()
 
                         evaluateJavascript(autoPlayScript, null)
-
-                        // Simulate touch to trigger play (works on TV boxes)
-                        postDelayed({
-                            val x = width / 2f
-                            val y = height / 2f
-                            val t = SystemClock.uptimeMillis()
-                            dispatchTouchEvent(
-                                MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0)
-                            )
-                            dispatchTouchEvent(
-                                MotionEvent.obtain(
-                                    SystemClock.uptimeMillis(),
-                                    SystemClock.uptimeMillis(),
-                                    MotionEvent.ACTION_UP, x, y, 0
-                                )
-                            )
-                        }, 4000)
                     }
                 }
 
