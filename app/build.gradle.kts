@@ -48,6 +48,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
+    implementation("org.java-websocket:Java-WebSocket:1.5.7")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

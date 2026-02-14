@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -74,11 +75,23 @@ class MainActivity : ComponentActivity() {
                             },
                             onError = { currentScreen = Screen.Error(it) }
                         )
-                        is Screen.Ready -> ReadyScreen(
-                            streams = screen.streams,
-                            onPlay = { url -> currentScreen = Screen.Player(url) },
-                            onRefresh = { currentScreen = Screen.Loading }
-                        )
+                        is Screen.Ready -> {
+                            var castTargetUrl by remember { mutableStateOf<String?>(null) }
+
+                            ReadyScreen(
+                                streams = screen.streams,
+                                onPlay = { url -> currentScreen = Screen.Player(url) },
+                                onRefresh = { currentScreen = Screen.Loading },
+                                onSendToTv = { url -> castTargetUrl = url }
+                            )
+
+                            castTargetUrl?.let { url ->
+                                TvDiscoveryDialog(
+                                    streamUrl = url,
+                                    onDismiss = { castTargetUrl = null }
+                                )
+                            }
+                        }
                         is Screen.Player -> {
                             LaunchedEffect(Unit) {
                                 WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -260,7 +273,12 @@ fun LoadingScreen(onStreamsFound: (List<StreamEntry>) -> Unit, onError: (String)
 }
 
 @Composable
-fun ReadyScreen(streams: List<StreamEntry>, onPlay: (String) -> Unit, onRefresh: () -> Unit) {
+fun ReadyScreen(
+    streams: List<StreamEntry>,
+    onPlay: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onSendToTv: (String) -> Unit
+) {
     val firstFocus = remember { FocusRequester() }
 
     LaunchedEffect(Unit) { firstFocus.requestFocus() }
@@ -278,14 +296,25 @@ fun ReadyScreen(streams: List<StreamEntry>, onPlay: (String) -> Unit, onRefresh:
         Spacer(modifier = Modifier.height(32.dp))
 
         streams.forEachIndexed { index, stream ->
-            TvButton(
-                label = "▶  ${stream.label}",
-                modifier = Modifier
-                    .width(220.dp)
-                    .height(56.dp)
-                    .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
-                onClick = { onPlay(stream.url) }
-            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TvButton(
+                    label = "▶  ${stream.label}",
+                    modifier = Modifier
+                        .width(180.dp)
+                        .height(56.dp)
+                        .then(if (index == 0) Modifier.focusRequester(firstFocus) else Modifier),
+                    onClick = { onPlay(stream.url) }
+                )
+                TvButton(
+                    label = "TV",
+                    modifier = Modifier.width(64.dp).height(56.dp),
+                    isSecondary = true,
+                    onClick = { onSendToTv(stream.url) }
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
         }
 
@@ -355,6 +384,136 @@ fun TvButton(
     ) {
         Text(label, fontWeight = FontWeight.Bold, fontSize = 16.sp)
     }
+}
+
+@Composable
+fun TvDiscoveryDialog(streamUrl: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val castState by SmartTvManager.stateFlow.collectAsState()
+
+    LaunchedEffect(Unit) {
+        SmartTvManager.discoverTvs(context, scope)
+    }
+
+    val dismiss = {
+        SmartTvManager.reset()
+        onDismiss()
+    }
+
+    AlertDialog(
+        onDismissRequest = dismiss,
+        containerColor = Color(0xFF1E2D40),
+        title = {
+            Text("Send to TV", color = Color.White, fontWeight = FontWeight.Bold)
+        },
+        text = {
+            when (val state = castState) {
+                is CastState.Idle, is CastState.Discovering -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color(0xFF4CAF50)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("Searching for Smart TVs...", color = Color.White)
+                    }
+                }
+                is CastState.Found -> {
+                    if (state.tvs.isEmpty()) {
+                        Text(
+                            "No Smart TVs found on your WiFi network.",
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    } else {
+                        Column {
+                            Text(
+                                "Select your TV:",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 13.sp
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            state.tvs.forEach { tv ->
+                                TvButton(
+                                    label = tv.name,
+                                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                                    onClick = {
+                                        SmartTvManager.connectAndCast(tv, streamUrl, context, scope)
+                                    }
+                                )
+                                Spacer(Modifier.height(6.dp))
+                            }
+                        }
+                    }
+                }
+                is CastState.Connecting -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color(0xFF4CAF50)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("Connecting to ${state.tv.name}...", color = Color.White)
+                    }
+                }
+                is CastState.WaitingForPairing -> {
+                    Column {
+                        Text(
+                            "Accept the pairing request on your TV",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "A dialog should appear on ${state.tv.name}. Select 'Allow' to continue.",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+                is CastState.Launching -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color(0xFF4CAF50)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("Opening stream on ${state.tv.name}...", color = Color.White)
+                    }
+                }
+                is CastState.Success -> {
+                    Text(
+                        "Stream sent! Check your TV.",
+                        color = Color(0xFF4CAF50),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                is CastState.Failure -> {
+                    Text("Failed: ${state.reason}", color = Color(0xFFFF5252))
+                }
+            }
+        },
+        confirmButton = {
+            when (castState) {
+                is CastState.Found, is CastState.Failure -> {
+                    TextButton(onClick = { SmartTvManager.discoverTvs(context, scope) }) {
+                        Text("Retry", color = Color(0xFF4CAF50))
+                    }
+                }
+                is CastState.Success -> {
+                    TextButton(onClick = dismiss) {
+                        Text("Done", color = Color(0xFF4CAF50))
+                    }
+                }
+                else -> {}
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = dismiss) {
+                Text("Cancel", color = Color.White.copy(alpha = 0.5f))
+            }
+        }
+    )
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -442,34 +601,6 @@ fun PlayerScreen(streamUrl: String) {
                                     }
                                 }, 1500);
                                 setTimeout(() => clearInterval(itv), 25000);
-
-                                // Live-edge buffer: stay 10s behind the buffered end
-                                // so brief server pauses don't interrupt playback
-                                var BUFFER_DELAY = 10;
-                                var bufferInitDone = false;
-                                var bufferItv = setInterval(() => {
-                                    var v = document.querySelector('video');
-                                    if (!v || !v.buffered || v.buffered.length === 0) return;
-                                    var buffEnd = v.buffered.end(v.buffered.length - 1);
-                                    var cur = v.currentTime;
-                                    if (!bufferInitDone) {
-                                        // On first run, jump back to create the delay
-                                        if (buffEnd - cur < 2 && buffEnd > BUFFER_DELAY) {
-                                            v.currentTime = buffEnd - BUFFER_DELAY;
-                                            bufferInitDone = true;
-                                        } else if (buffEnd > BUFFER_DELAY) {
-                                            bufferInitDone = true;
-                                        }
-                                    }
-                                    // If we've caught up too close to the live edge, fall back
-                                    if (bufferInitDone && buffEnd - cur < 3 && buffEnd > BUFFER_DELAY) {
-                                        v.currentTime = buffEnd - BUFFER_DELAY;
-                                    }
-                                    // If paused due to stall and we have buffer, resume
-                                    if (v.paused && buffEnd - cur > 2) {
-                                        v.play().catch(()=>{});
-                                    }
-                                }, 3000);
                             })();
                         """.trimIndent()
 
